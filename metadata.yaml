@@ -1,0 +1,9 @@
+name: "astrbot_plugin_whisper"
+display_name: "Whisper 私聊主动消息"
+author: "Your Name"
+version: "0.4.8"
+desc: "基于对话感知的私聊主动消息插件，两阶段 LLM 调用：智能判断是否主动发送消息及预测触发时间 (v0.4.8)"
+repo: ""
+support_platforms:
+  - "aiocqhttp"
+astrbot_version: ">=4.14,<5"

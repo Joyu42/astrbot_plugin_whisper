@@ -1,0 +1,70 @@
+{
+    "enable": {
+        "type": "bool",
+        "default": true,
+        "description": "启用 Whisper 主动消息功能"
+    },
+    "silence_trigger_minutes": {
+        "type": "int",
+        "default": 5,
+        "description": "用户沉默多久后触发主动消息检查（分钟）",
+        "slider": {"min": 1, "max": 30, "step": 1}
+    },
+    "timeout_max": {
+        "type": "int",
+        "default": 30,
+        "description": "主动检查的最大退避间隔（分钟）",
+        "slider": {"min": 1, "max": 120, "step": 1}
+    },
+    "max_consecutive": {
+        "type": "int",
+        "default": 3,
+        "description": "最大连续主动消息数",
+        "slider": {"min": 1, "max": 10, "step": 1}
+    },
+    "quiet_hours_start": {
+        "type": "string",
+        "default": "23:00",
+        "description": "安静时段开始时间 (HH:MM)"
+    },
+    "quiet_hours_end": {
+        "type": "string",
+        "default": "08:00",
+        "description": "安静时段结束时间 (HH:MM)"
+    },
+    "quiet_hours_enabled": {
+        "type": "bool",
+        "default": true,
+        "description": "启用安静时段"
+    },
+    "max_history_messages": {
+        "type": "int",
+        "default": 20,
+        "description": "发给 LLM 的最大历史消息数"
+    },
+    "segment_enabled": {
+        "type": "bool",
+        "default": true,
+        "description": "启用分段发送"
+    },
+    "segment_max_length": {
+        "type": "int",
+        "default": 100,
+        "description": "分段最大字符数"
+    },
+    "segment_delay_ms": {
+        "type": "int",
+        "default": 1500,
+        "description": "分段发送间隔（毫秒）"
+    },
+    "proactive_prompt": {
+        "type": "text",
+        "default": "你正在与一个朋友私聊。\n现在是 {{current_time}}，对方已经有一段时间没有回复了（你已主动发送了 {{unanswered_count}} 条消息未得到回复）。\n\n请判断你是否应该主动发送一条消息。考虑以下因素：\n1. 对话的上下文和氛围\n2. 上次对话的内容是否需要跟进\n3. 你已经发送了多少条未回复的消息（避免骚扰）\n4. 当前时间是否合适发消息\n\n请以 JSON 格式回复：\n{\"should_send\": true/false, \"content\": \"你要发送的消息内容\", \"reason\": \"你做出这个判断的原因\"}\n\n规则：\n- 只输出 JSON，不要有任何其他文字。\n- 如果 should_send=false，content 必须是空字符串。\n- 如果 should_send=true，content 必须是非空字符串。",
+        "description": "主动消息判断提示词模板"
+    },
+    "prediction_prompt": {
+        "type": "text",
+        "default": "你正在与一个朋友私聊。\n现在是 {{current_time}}，对方已经有一段时间没有回复了（你已主动发送了 {{unanswered_count}} 条消息未得到回复）。\n\n请根据对话的上下文和氛围，判断你应该在多少分钟后主动发送一条消息。\n考虑以下因素：\n1. 对话的上下文和当前状态\n2. 上次对话的内容是否需要跟进\n3. 你已经发送了多少条未回复的消息（避免骚扰）\n4. 当前时间是否合适\n5. 用户可能正在忙碌还是有空\n\n你必须严格按照以下 JSON 格式回复（两个字段缺一不可）：\n{\"reason\": \"你的判断原因\", \"minutes\": 分钟数}\n\n示例回复：\n{\"reason\": \"凌晨4点对方可能在睡觉，不宜打扰，等早上再联系\", \"minutes\": 25}\n{\"reason\": \"刚聊完一个有趣的话题，对方可能只是暂时忙，稍后跟进\", \"minutes\": 10}\n\n规则：\n- reason：简短中文，说明为什么选择这个等待时间（不可省略，不可为空）\n- minutes：正整数，上限 {{timeout_max}} 分钟\n- 如果不适合发消息，给较大的数字并在 reason 中说明\n- 回复只包含 JSON，不要有任何其他文字，不要生成消息内容。",
+        "description": "LLM 时间预测提示词模板"
+    }
+}
