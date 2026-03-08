@@ -14,7 +14,6 @@ class SessionState:
     next_trigger_time: float = 0.0  # Next scheduled trigger time
     enabled: bool = True  # Whether this session is enabled
     self_id: str = ""  # Bot's own ID
-    pending_phase: str = "predict"  # Phase-aware persistence: "predict" or "send"
 
     backoff_level: int = 0
     last_check_time: float = 0.0
@@ -28,16 +27,7 @@ class LLMDecision:
     content: str = ""  # Message content
     reason: str = ""  # Generation reason
     prompt: str = ""  # The prompt sent to LLM (for archiving)
-
-
-@dataclass
-class PredictionResult:
-    """Phase 1 LLM prediction result."""
-
-    minutes: int = 0  # LLM predicted minutes
-    reason: str = ""  # Prediction reason (optional, for logging)
-    prompt: str = ""  # The prompt sent to LLM (for archiving)
-    valid: bool = True  # Whether parsing was successful
+    spotify_action: Optional[dict] = None
 
 
 @dataclass
@@ -52,11 +42,19 @@ class WhisperConfig:
     quiet_hours_start: str = "23:00"
     quiet_hours_end: str = "08:00"
     max_history_messages: int = 20
+    # Segment settings
     segment_enabled: bool = True
-    segment_max_length: int = 100
+    segment_threshold: int = 150  # If text > threshold, don't segment
+    segment_mode: str = "regex"  # "regex" or "words"
+    segment_regex: str = r".*?[。？！~…\n]+|.+$"
+    segment_words: str = "。！？～…\n"
     segment_delay_ms: int = 1500
     proactive_prompt: str = ""
-    prediction_prompt: str = ""
+    mcp_enabled: bool = False
+    mcp_services: list = field(default_factory=list)
+    spotify_context_enabled: bool = False
+    spotify_suggest_enabled: bool = False
+    spotify_mcp_command: str = "node data/mcp_servers/spotify-mcp-server/build/index.js"
 
 
 def parse_config(raw_config: dict, session_id: Optional[str] = None) -> WhisperConfig:
@@ -89,10 +87,20 @@ def parse_config(raw_config: dict, session_id: Optional[str] = None) -> WhisperC
         quiet_hours_end=raw_config.get("quiet_hours_end", "08:00"),
         max_history_messages=raw_config.get("max_history_messages", 20),
         segment_enabled=raw_config.get("segment_enabled", True),
-        segment_max_length=raw_config.get("segment_max_length", 100),
+        segment_threshold=raw_config.get("segment_threshold", 150),
+        segment_mode=raw_config.get("segment_mode", "regex"),
+        segment_regex=raw_config.get("segment_regex", r".*?[。？！~…\n]+|.+$"),
+        segment_words=raw_config.get("segment_words", "。！？～…\n"),
         segment_delay_ms=raw_config.get("segment_delay_ms", 1500),
         proactive_prompt=raw_config.get("proactive_prompt", ""),
-        prediction_prompt=raw_config.get("prediction_prompt", ""),
+        mcp_enabled=raw_config.get("mcp_enabled", False),
+        mcp_services=raw_config.get("mcp_services", []),
+        spotify_context_enabled=raw_config.get("spotify_context_enabled", False),
+        spotify_suggest_enabled=raw_config.get("spotify_suggest_enabled", False),
+        spotify_mcp_command=raw_config.get(
+            "spotify_mcp_command",
+            "node data/mcp_servers/spotify-mcp-server/build/index.js",
+        ),
     )
 
     # Apply session-level overrides if available

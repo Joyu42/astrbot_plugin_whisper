@@ -14,6 +14,40 @@ Whisper 是一款基于对话感知的私聊主动消息插件，适用于 AstrB
 - **会话隔离**: 支持为不同会话配置不同的参数
 - **状态控制**: 提供命令实时启用/禁用插件
 
+## MCP 状态感知（可选功能）
+
+从 v0.6.0 开始，Whisper 支持通过 MCP（Model Context Protocol）获取外部状态信息，辅助 LLM 做出更智能的主动消息决策。
+
+### 功能说明
+
+- **MCP 状态感知**: 插件会定期通过 MCP 服务查询外部状态（如 Spotify 播放状态），并将状态信息纳入 LLM 决策上下文
+- **智能决策增强**: LLM 可以根据用户当前的外部状态（如正在听音乐、正在会议中）决定是否发送消息
+- **状态检查**: 用户沉默触发检查时，插件会先通过 MCP 获取最新状态，再将状态信息发送给 LLM
+
+### 前置要求
+
+1. **独立运行 MCP 服务器**: 你需要自行运行 MCP 服务器（如 Spotify MCP Server）。插件本身不包含 MCP 服务器
+2. **配置 MCP 服务**: 在配置中指定 MCP 服务的连接信息
+
+### 配置示例
+
+```yaml
+mcp_enabled: true
+mcp_services:
+  - name: "spotify"
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-spotify"]
+    env:
+      SPOTIFY_CLIENT_ID: "your_client_id"
+      SPOTIFY_CLIENT_SECRET: "your_client_secret"
+```
+
+### 注意事项
+
+- MCP 功能默认关闭，需将 `mcp_enabled` 设置为 `true` 才会启用
+- 目前插件仅支持读取 MCP 状态，不支持调用 MCP 工具
+- 如未运行 MCP 服务器，插件会跳过状态检查，正常执行主动消息判断
+
 ## 安装方法
 
 1. 确保已安装 AstrBot 4.14 或更高版本
@@ -38,6 +72,9 @@ Whisper 是一款基于对话感知的私聊主动消息插件，适用于 AstrB
 | `segment_delay_ms` | int | 1500 | 分段发送间隔（毫秒） |
 | `proactive_prompt` | text | (见配置页面) | 主动消息判断提示词模板 |
 | `session_configs` | object | {} | 每会话独立配置 |
+| `mcp_enabled` | bool | false | 启用 MCP 状态感知 |
+| `mcp_services` | list | [] | MCP 服务列表（需自行运行 MCP 服务器） |
+| `mcp_status_check_interval` | int | 60 | MCP 状态检查间隔（秒） |
 
 ## 命令说明
 

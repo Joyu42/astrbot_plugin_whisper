@@ -9,7 +9,7 @@ from datetime import time as datetime_time
 from typing import Optional
 
 # Import dataclasses from models module
-from .models import SessionState, LLMDecision, PredictionResult, WhisperConfig
+from .models import SessionState, LLMDecision, WhisperConfig
 
 
 # ===== Prompt Template Constants =====
@@ -26,37 +26,13 @@ DEFAULT_PROMPT_TEMPLATE = """你正在与一个朋友私聊。
 4. 当前时间是否合适发消息
 
 请以 JSON 格式回复：
-{"should_send": true/false, "content": "你要发送的消息内容", "reason": "你做出这个判断的原因"}
+{"should_send": true/false, "content": "你要发送的消息内容", "reason": "你做出这个判断的原因", "spotify_action": {"type": "recommend", "query": "..."}}
 
 规则：
 - 只输出 JSON，不要有任何其他文字。
 - 如果 should_send=false，content 必须是空字符串。
-- 如果 should_send=true，content 必须是非空字符串。"""
-
-
-DEFAULT_PREDICTION_PROMPT_TEMPLATE = """你正在与一个朋友私聊。
-现在是 {{current_time}}，对方已经有一段时间没有回复了（你已主动发送了 {{unanswered_count}} 条消息未得到回复）。
-
-请根据对话的上下文和氛围，判断你应该在多少分钟后主动发送一条消息。
-考虑以下因素：
-1. 对话的上下文和当前状态
-2. 上次对话的内容是否需要跟进
-3. 你已经发送了多少条未回复的消息（避免骚扰）
-4. 当前时间是否合适
-5. 用户可能正在忙碌还是有空
-
-你必须严格按照以下 JSON 格式回复（两个字段缺一不可）：
-{"reason": "你的判断原因", "minutes": 分钟数}
-
-示例回复：
-{"reason": "凌晨4点对方可能在睡觉，不宜打扰，等早上再联系", "minutes": 25}
-{"reason": "刚聊完一个有趣的话题，对方可能只是暂时忙，稍后跟进", "minutes": 10}
-
-规则：
-- reason：简短中文，说明为什么选择这个等待时间（不可省略，不可为空）
-- minutes：正整数，上限 {{timeout_max}} 分钟
-- 如果不适合发消息，给较大的数字并在 reason 中说明
-- 回复只包含 JSON，不要有任何其他文字，不要生成消息内容"""
+- 如果 should_send=true，content 必须是非空字符串。
+- 如果你在上下文中看到用户正在听某首歌或者使用某个功能，且你在回复文字中想给出相关的动作建议（如：切歌、播放某个特定类型/专辑歌曲...），你可以可选地在 JSON 中附加 "spotify_action": {"type": "recommend", "query": "..."}"""
 
 
 # ===== Time and Delay Functions =====
@@ -158,31 +134,6 @@ def get_silence_trigger_delay(config: WhisperConfig) -> int:
     return config.silence_trigger_minutes * 60
 
 
-def get_delay_from_llm(config: WhisperConfig, next_trigger_minutes: int) -> int:
-    """
-    Calculate delay based on LLM's suggested trigger time.
-
-    If LLM returns a valid time within bounds, use it.
-    Otherwise, fallback to silence_trigger_minutes.
-
-    Args:
-        config: WhisperConfig with timeout settings
-        next_trigger_minutes: LLM's suggested trigger time in minutes
-
-    Returns:
-        Delay in seconds
-    """
-    # If LLM returns 0 or invalid, use silence_trigger_minutes
-    if next_trigger_minutes <= 0:
-        return get_silence_trigger_delay(config)
-
-    # Clamp to configured bounds
-    effective_minutes = max(
-        config.silence_trigger_minutes, min(next_trigger_minutes, config.timeout_max)
-    )
-    return effective_minutes * 60
-
-
 def should_send_proactive(
     config: WhisperConfig, state: SessionState
 ) -> tuple[bool, str]:
@@ -240,7 +191,7 @@ def replace_prompt_placeholders(template: str, state: SessionState, config=None)
 
 
 def _build_proactive_prompt(
-    config: WhisperConfig, state: SessionState, history_text: str = ""
+    config: WhisperConfig, state: SessionState, additional_context: str = ""
 ) -> str:
     """
     Build the prompt for LLM decision.
@@ -252,7 +203,7 @@ def _build_proactive_prompt(
     Args:
         config: WhisperConfig
         state: SessionState
-        history_text: (Deprecated, kept for backward compatibility)
+        additional_context: Additional external state context to append (e.g., Spotify status)
 
     Returns:
         Formatted prompt string
@@ -263,22 +214,10 @@ def _build_proactive_prompt(
     # History is passed via contexts, no need to include in prompt text
     # (matching proactive_chat behavior)
 
-    return prompt
+    # Append additional_context if provided and not empty
+    if additional_context:
+        prompt += f"\n\n[额外外部状态上下文]\n{additional_context}"
 
-
-def _build_prediction_prompt(config: WhisperConfig, state: SessionState) -> str:
-    """
-    Build the prediction prompt for Phase 1 LLM call.
-
-    Args:
-        config: WhisperConfig
-        state: SessionState
-
-    Returns:
-        Formatted prompt string for time prediction
-    """
-    template = config.prediction_prompt or DEFAULT_PREDICTION_PROMPT_TEMPLATE
-    prompt = replace_prompt_placeholders(template, state, config)
     return prompt
 
 
@@ -307,6 +246,11 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
 
         content = str(data.get("content", ""))
         reason = str(data.get("reason", ""))
+        spotify_action = (
+            data.get("spotify_action")
+            if isinstance(data.get("spotify_action"), dict)
+            else None
+        )
         if should_send is None:
             reason = "missing_should_send"
         elif should_send is True and not content:
@@ -315,6 +259,7 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
             should_send=should_send,
             content=content,
             reason=reason,
+            spotify_action=spotify_action,
         )
     except json.JSONDecodeError:
         pass
@@ -330,6 +275,11 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
                 should_send = None
             content = str(data.get("content", ""))
             reason = str(data.get("reason", ""))
+            spotify_action = (
+                data.get("spotify_action")
+                if isinstance(data.get("spotify_action"), dict)
+                else None
+            )
             if should_send is None:
                 reason = "missing_should_send"
             elif should_send is True and not content:
@@ -338,6 +288,7 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
                 should_send=should_send,
                 content=content,
                 reason=reason,
+                spotify_action=spotify_action,
             )
         except:
             pass
@@ -353,6 +304,11 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
                 should_send = None
             content = str(data.get("content", ""))
             reason = str(data.get("reason", ""))
+            spotify_action = (
+                data.get("spotify_action")
+                if isinstance(data.get("spotify_action"), dict)
+                else None
+            )
             if should_send is None:
                 reason = "missing_should_send"
             elif should_send is True and not content:
@@ -361,58 +317,13 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
                 should_send=should_send,
                 content=content,
                 reason=reason,
+                spotify_action=spotify_action,
             )
         except:
             pass
 
     # All parsing failed
     return LLMDecision(reason="json_parse_failed")
-
-
-def _parse_prediction_response(raw_text: str) -> PredictionResult:
-    """
-    Parse Phase 1 LLM response for time prediction.
-
-    Args:
-        raw_text: Raw LLM response text
-
-    Returns:
-        PredictionResult with parsed minutes and validity flag
-    """
-    if not raw_text or not raw_text.strip():
-        return PredictionResult(valid=False)
-
-    json_match = None
-
-    # Try direct JSON parse first
-    try:
-        data = json.loads(raw_text.strip())
-        if isinstance(data, dict) and "minutes" in data:
-            minutes = data.get("minutes")
-            reason = str(data.get("reason", ""))
-            if isinstance(minutes, (int, float)) and minutes > 0:
-                return PredictionResult(minutes=int(minutes), reason=reason, valid=True)
-            else:
-                return PredictionResult(reason=reason, valid=False)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Try regex to extract JSON block
-    try:
-        json_match = re.search(r"\{[^}]+\}", raw_text, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group())
-            if isinstance(data, dict) and "minutes" in data:
-                minutes = data.get("minutes")
-                reason = str(data.get("reason", ""))
-                if isinstance(minutes, (int, float)) and minutes > 0:
-                    return PredictionResult(
-                        minutes=int(minutes), reason=reason, valid=True
-                    )
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    return PredictionResult(valid=False)
 
 
 # ===== Text Processing =====
@@ -459,39 +370,58 @@ def apply_jitter(seconds: int, ratio: float = 0.1) -> int:
     return random.randint(low, high)
 
 
-def _segment_text(text: str, max_length: int = 100) -> list[str]:
-    """
-    Segment long text into smaller chunks.
-
-    Args:
-        text: Input text
-        max_length: Maximum length per segment
-
-    Returns:
-        List of text segments
-    """
+def _segment_text(
+    text: str,
+    threshold: int = 150,
+    mode: str = "regex",
+    regex_pattern: str = r"([。？！~…\n])",
+    split_words: str = "。！？～…\n",
+) -> list[str]:
     if not text:
         return []
 
-    # First try to split by natural punctuation
-    import re
-
-    sentences = re.split(r"(?<=[。！？\n])\s*", text)
+    if len(text) <= threshold:
+        return [text]
 
     segments = []
-    current = ""
+    max_len = threshold
 
-    for sentence in sentences:
-        if len(current) + len(sentence) <= max_length:
-            current += sentence
+    if mode == "regex":
+        import re
+
+        parts = re.split(regex_pattern, text)
+    else:
+        parts = []
+        current = ""
+        for char in text:
+            current += char
+            if char in split_words:
+                parts.append(current)
+                current = ""
+        if current:
+            parts.append(current)
+
+    rejoined = []
+    current = ""
+    for p in parts:
+        current += p
+        if p and p[-1] in "。？！~…\n":
+            rejoined.append(current)
+            current = ""
+    if current:
+        rejoined.append(current)
+
+    current = ""
+    for part in rejoined:
+        if len(current) + len(part) <= max_len:
+            current += part
         else:
             if current:
                 segments.append(current)
-            # If single sentence exceeds max_length, force split
-            while len(sentence) > max_length:
-                segments.append(sentence[:max_length])
-                sentence = sentence[max_length:]
-            current = sentence
+            while len(part) > max_len:
+                segments.append(part[:max_len])
+                part = part[max_len:]
+            current = part
 
     if current:
         segments.append(current)

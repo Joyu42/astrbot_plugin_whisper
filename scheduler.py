@@ -45,64 +45,18 @@ def _init_scheduler(plugin_instance):
     return scheduler
 
 
-def _schedule_predict(scheduler, session_id: str, delay_seconds: int):
-    """Schedule a phase 1 predict job for a session."""
-    _cancel_all_session_jobs(scheduler, session_id)
-    run_date = datetime.now() + timedelta(seconds=delay_seconds)
-    scheduler.add_job(
-        func=_on_predict_timeout_wrapper,
-        trigger=DateTrigger(run_date=run_date),
-        args=[session_id],
-        id=f"whisper_predict_{session_id}",
-        replace_existing=True,
-    )
-
-
-def _schedule_send(scheduler, session_id: str, delay_seconds: int):
-    """Schedule a phase 2 send job for a session."""
-    _cancel_send_job(scheduler, session_id)
-    run_date = datetime.now() + timedelta(seconds=delay_seconds)
-    scheduler.add_job(
-        func=_on_send_timeout_wrapper,
-        trigger=DateTrigger(run_date=run_date),
-        args=[session_id],
-        id=f"whisper_send_{session_id}",
-        replace_existing=True,
-    )
-
-
 def _cancel_all_session_jobs(scheduler, session_id: str):
-    """Cancel both predict and send jobs for a session."""
-    try:
-        scheduler.remove_job(f"whisper_predict_{session_id}")
-    except:
-        pass
-    try:
-        scheduler.remove_job(f"whisper_send_{session_id}")
-    except:
-        pass
+    """Cancel whisper_check job for a session."""
     try:
         scheduler.remove_job(f"whisper_check_{session_id}")
     except:
         pass
 
 
-def _cancel_send_job(scheduler, session_id: str):
-    """Cancel only the send job for a session."""
-    try:
-        scheduler.remove_job(f"whisper_send_{session_id}")
-    except:
-        pass
-
-
 def _cancel_all_checks(scheduler):
-    """Cancel all scheduled whisper jobs (predict and send)."""
+    """Cancel all scheduled whisper check jobs."""
     for job in scheduler.get_jobs():
-        if (
-            job.id.startswith("whisper_predict_")
-            or job.id.startswith("whisper_send_")
-            or job.id.startswith("whisper_check_")
-        ):
+        if job.id.startswith("whisper_check_"):
             try:
                 scheduler.remove_job(job.id)
             except:
@@ -136,27 +90,6 @@ def _set_plugin_instance(plugin: "WhisperPlugin"):
     """Set the global plugin instance for scheduler callbacks."""
     global _plugin_instance
     _plugin_instance = plugin
-
-
-def _get_job_id(session_id: str, phase: str) -> str:
-    """Get job ID for a session and phase."""
-    return f"whisper_{phase}_{session_id}"
-
-
-async def _on_predict_timeout_wrapper(session_id: str):
-    """Wrapper for phase 1 predict timeout callback."""
-    if _plugin_instance:
-        await _plugin_instance._execute_check(session_id)
-    else:
-        logger.warning(f"[Whisper] 未找到会话 {session_id} 的插件实例")
-
-
-async def _on_send_timeout_wrapper(session_id: str):
-    """Wrapper for phase 2 send timeout callback."""
-    if _plugin_instance:
-        await _plugin_instance._execute_check(session_id)
-    else:
-        logger.warning(f"[Whisper] 未找到会话 {session_id} 的插件实例")
 
 
 async def _on_check_timeout_wrapper(session_id: str):
