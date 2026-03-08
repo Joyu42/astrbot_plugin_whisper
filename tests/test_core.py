@@ -130,7 +130,10 @@ class TestDataModels:
         assert config.mcp_services == []
         assert config.spotify_context_enabled is False
         assert config.spotify_suggest_enabled is False
-        assert config.spotify_mcp_command == "npx -y @marcelmarais/spotify-mcp-server"
+        assert (
+            config.spotify_mcp_command
+            == "node data/mcp_servers/spotify-mcp-server/build/index.js"
+        )
 
     def test_session_state_has_backoff_fields(self):
         """SessionState should expose backoff fields for single-phase checks."""
