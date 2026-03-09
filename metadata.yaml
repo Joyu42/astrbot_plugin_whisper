@@ -1,9 +1,9 @@
 name: "astrbot_plugin_whisper"
 display_name: "Whisper 私聊主动消息"
-author: "Your Name"
+author: "Joyu"
 version: "0.6.5"
 desc: "基于对话感知的私聊主动消息插件，单阶段 LLM 调用 + MCP 状态感知 (v0.6.5)"
-repo: ""
+repo: "https://github.com/Joyu42/astrbot_plugin_whisper"
 support_platforms:
   - "aiocqhttp"
 astrbot_version: ">=4.14,<5"
