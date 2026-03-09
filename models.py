@@ -55,6 +55,7 @@ class WhisperConfig:
     spotify_context_enabled: bool = False
     spotify_suggest_enabled: bool = False
     spotify_mcp_command: str = "node data/mcp_servers/spotify-mcp-server/build/index.js"
+    llm_provider_id: str = ""
 
 
 def parse_config(raw_config: dict, session_id: Optional[str] = None) -> WhisperConfig:
@@ -101,6 +102,7 @@ def parse_config(raw_config: dict, session_id: Optional[str] = None) -> WhisperC
             "spotify_mcp_command",
             "node data/mcp_servers/spotify-mcp-server/build/index.js",
         ),
+        llm_provider_id=raw_config.get("llm_provider_id", ""),
     )
 
     # Apply session-level overrides if available

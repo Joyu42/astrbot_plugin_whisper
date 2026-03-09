@@ -60,8 +60,8 @@ from .scheduler import (
 @register(
     "astrbot_plugin_whisper",
     "Your Name",
-    "基于对话感知的私聊主动消息插件，单阶段 LLM 调用 + MCP 状态感知 (v0.6.3)",
-    "0.6.3",
+    "基于对话感知的私聊主动消息插件，单阶段 LLM 调用 + MCP 状态感知 (v0.7.0)",
+    "0.7.0",
 )
 class WhisperPlugin(Star):
     """Whisper - 基于对话感知的私聊主动消息插件"""
@@ -417,7 +417,12 @@ class WhisperPlugin(Star):
 
         llm_response = None
         try:
-            provider_id = await self.context.get_current_chat_provider_id(session_id)
+            # Use configured provider if set, otherwise fall back to session default
+            provider_id = config.llm_provider_id
+            if not provider_id:
+                provider_id = await self.context.get_current_chat_provider_id(
+                    session_id
+                )
             llm_response = await self.context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt=prompt,

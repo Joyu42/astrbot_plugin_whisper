@@ -4,6 +4,13 @@
         "default": true,
         "description": "启用 Whisper 主动消息功能"
     },
+    "llm_provider_id": {
+        "type": "string",
+        "default": "",
+        "description": "主动消息生成使用的 LLM 提供商",
+        "hint": "留空则使用当前对话的模型",
+        "_special": "select_provider"
+    },
     "silence_trigger_minutes": {
         "type": "int",
         "default": 5,

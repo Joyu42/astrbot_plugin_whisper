@@ -134,6 +134,7 @@ class TestDataModels:
             config.spotify_mcp_command
             == "node data/mcp_servers/spotify-mcp-server/build/index.js"
         )
+        assert config.llm_provider_id == ""
 
     def test_session_state_has_backoff_fields(self):
         """SessionState should expose backoff fields for single-phase checks."""
@@ -246,6 +247,7 @@ class TestConfigParsing:
             "spotify_context_enabled": True,
             "spotify_suggest_enabled": True,
             "spotify_mcp_command": "npx -y custom-spotify-mcp",
+            "llm_provider_id": "deepseek/deepseek-chat",
         }
 
         config = parse_config(raw_config)
@@ -268,6 +270,7 @@ class TestConfigParsing:
         assert config.spotify_context_enabled is True
         assert config.spotify_suggest_enabled is True
         assert config.spotify_mcp_command == "npx -y custom-spotify-mcp"
+        assert config.llm_provider_id == "deepseek/deepseek-chat"
 
 
 # ===== Test Quiet Hours =====
