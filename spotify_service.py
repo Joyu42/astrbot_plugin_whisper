@@ -1,11 +1,41 @@
 """Spotify MCP Service implementation for Whisper plugin."""
 
+import re
 import traceback
 from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+
+def _parse_markdown_now_playing(text: str) -> dict | None:
+    """解析 Spotify MCP 返回的 Markdown 格式文本。
+
+    例如:
+        # Currently Playing
+        **Track**: "片っぽ"
+        **Artist**: eill
+        **Device**: EdgeMac (Computer)
+
+    Returns:
+        解析后的字典 {"track": ..., "artist": ..., "device": ...}，
+        如果文本不包含播放信息则返回 None。
+    """
+    if "Currently Playing" not in text and "Track" not in text:
+        return None
+
+    result = {}
+    # 匹配 **Key**: Value 或 **Key**: "Value" 格式
+    for match in re.finditer(r'\*\*(\w+)\*\*\s*:\s*"?([^"\n]+)"?', text):
+        key = match.group(1).strip().lower()
+        value = match.group(2).strip()
+        result[key] = value
+
+    if not result.get("track") and not result.get("artist"):
+        return None
+
+    return result
 
 
 class SpotifyMCPService:
@@ -53,27 +83,44 @@ class SpotifyMCPService:
                     if hasattr(result, "content"):
                         for content in result.content:
                             if hasattr(content, "text") and content.text:
+                                text = content.text.strip()
                                 import json
 
+                                # 尝试 JSON 解析
                                 try:
-                                    data = json.loads(content.text)
-                                except (json.JSONDecodeError, ValueError):
+                                    data = json.loads(text)
                                     logger.debug(
-                                        f"[Whisper] Spotify MCP 返回非 JSON 文本: {content.text[:200]}"
+                                        f"[Whisper] Spotify MCP 返回 JSON 数据: {data}"
                                     )
+                                    if data.get("is_playing"):
+                                        name = data.get("name", "Unknown")
+                                        artist = data.get("artist", "Unknown")
+                                        device = data.get("device", "Unknown")
+                                        context_str = f"用户当前正在听 Spotify: {name} - {artist} (在设备 {device} 上)"
+                                        logger.info(
+                                            f"[Whisper] Spotify 解析成功 (JSON): {name} - {artist}"
+                                        )
+                                        return context_str
                                     continue
-                                logger.debug(
-                                    f"[Whisper] Spotify MCP 返回原始数据: {data}"
-                                )
-                                if data.get("is_playing"):
-                                    name = data.get("name", "Unknown")
-                                    artist = data.get("artist", "Unknown")
-                                    device = data.get("device", "Unknown")
+                                except (json.JSONDecodeError, ValueError):
+                                    pass
+
+                                # 回退: 解析 Markdown 纯文本格式
+                                # 例如: **Track**: "片っぽ"\n**Artist**: eill
+                                parsed = _parse_markdown_now_playing(text)
+                                if parsed:
+                                    name = parsed.get("track", "Unknown")
+                                    artist = parsed.get("artist", "Unknown")
+                                    device = parsed.get("device", "Unknown")
                                     context_str = f"用户当前正在听 Spotify: {name} - {artist} (在设备 {device} 上)"
                                     logger.info(
-                                        f"[Whisper] Spotify 解析成功: {name} - {artist}"
+                                        f"[Whisper] Spotify 解析成功 (Markdown): {name} - {artist}"
                                     )
                                     return context_str
+
+                                logger.debug(
+                                    f"[Whisper] Spotify MCP 返回无法解析的文本: {text[:200]}"
+                                )
                     logger.info("[Whisper] Spotify 当前未在播放")
                     return ""
         except Exception as e:
