@@ -35,7 +35,13 @@ class SpotifyMCPService:
         Returns:
             str: The current playing context as a string, or empty string if not playing.
         """
-        server_params = StdioServerParameters(command=self._cmd, args=self._args)
+        import os
+
+        # 使用 AstrBot 工作目录作为 cwd，确保 MCP server 能找到相对路径的配置文件
+        astrbot_cwd = os.getcwd()
+        server_params = StdioServerParameters(
+            command=self._cmd, args=self._args, cwd=astrbot_cwd
+        )
         logger.debug(f"[Whisper] 启动 Spotify MCP: {self.command}")
         try:
             async with stdio_client(server_params) as (read, write):
@@ -46,10 +52,16 @@ class SpotifyMCPService:
                     # The result structure depends on the MCP server implementation
                     if hasattr(result, "content"):
                         for content in result.content:
-                            if hasattr(content, "text"):
+                            if hasattr(content, "text") and content.text:
                                 import json
 
-                                data = json.loads(content.text)
+                                try:
+                                    data = json.loads(content.text)
+                                except (json.JSONDecodeError, ValueError):
+                                    logger.debug(
+                                        f"[Whisper] Spotify MCP 返回非 JSON 文本: {content.text[:200]}"
+                                    )
+                                    continue
                                 logger.debug(
                                     f"[Whisper] Spotify MCP 返回原始数据: {data}"
                                 )
