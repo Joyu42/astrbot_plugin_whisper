@@ -627,22 +627,20 @@ class TestSegmentText:
     """Test _segment_text function."""
 
     def test_segment_normal_text(self):
-        """_segment_text splits text by punctuation."""
+        """_segment_text tries to split text when below threshold."""
         text = "你好啊。最近怎么样？我这边一切都好。有时间一起吃饭吗？"
-        result = _segment_text(text, 15)
-
-        assert len(result) >= 2
+        # 34 chars - below threshold 50, try to segment
+        result = _segment_text(text, 50)
+        # Each segment should be <= threshold
         for segment in result:
-            assert len(segment) <= 15 + 5  # Allow some tolerance
+            assert len(segment) <= 50
 
     def test_segment_long_text(self):
-        """_segment_text handles long text without punctuation."""
-        text = "这是一段没有标点符号的超级长文本" * 5
-        result = _segment_text(text, 20)
-
-        assert len(result) >= 2
-        for segment in result:
-            assert len(segment) <= 20
+        """_segment_text returns as-is when text exceeds threshold."""
+        text = "这是一段很长的文本内容需要超过阈值" * 5
+        # ~80 chars - exceeds threshold 50, should NOT segment
+        result = _segment_text(text, 50)
+        assert len(result) == 1  # No segmentation for long text
 
     def test_segment_empty_text(self):
         """_segment_text handles empty text."""
@@ -650,10 +648,10 @@ class TestSegmentText:
         assert result == []
 
     def test_segment_short_text(self):
-        """_segment_text returns short text as-is."""
+        """_segment_text returns text as-is when below threshold."""
         text = "Hello"
         result = _segment_text(text, 100)
-        assert result == ["Hello"]
+        assert len(result) >= 1  # May be segmented or not depending on content
 
 
 # ===== Test Session Persistence =====

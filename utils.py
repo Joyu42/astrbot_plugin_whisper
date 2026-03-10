@@ -380,7 +380,8 @@ def _segment_text(
     if not text:
         return []
 
-    if len(text) <= threshold:
+    # If text exceeds threshold, don't segment (long text - send as-is)
+    if len(text) > threshold:
         return [text]
 
     segments = []
