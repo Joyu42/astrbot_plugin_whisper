@@ -44,7 +44,7 @@ class WhisperConfig:
     max_history_messages: int = 20
     # Segment settings
     segment_enabled: bool = True
-    segment_threshold: int = 150  # If text > threshold, don't segment
+    segment_threshold: int = 50  # If text < threshold, don't segment
     segment_mode: str = "regex"  # "regex" or "words"
     segment_regex: str = r".*?[。？！~…\n]+|.+$"
     segment_words: str = "。！？～…\n"

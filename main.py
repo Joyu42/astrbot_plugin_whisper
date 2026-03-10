@@ -224,8 +224,13 @@ class WhisperPlugin(Star):
                 config.segment_regex,
                 config.segment_words,
             )
+            logger.debug(
+                f"[Whisper] 分段结果: 原始长度={len(content)}, 阈值={config.segment_threshold}, "
+                f"分段数={len(segments)}"
+            )
         else:
             segments = [content]
+            logger.debug("[Whisper] 分段已禁用")
 
         # Send each segment (matching reference plugin: MessageChain([Plain(text=...)]))
         for idx, segment in enumerate(segments):

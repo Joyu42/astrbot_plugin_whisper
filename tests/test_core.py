@@ -121,7 +121,7 @@ class TestDataModels:
         assert config.quiet_hours_end == "08:00"
         assert config.max_history_messages == 20
         assert config.segment_enabled is True
-        assert config.segment_threshold == 150
+        assert config.segment_threshold == 50
         assert config.segment_mode == "regex"
         assert config.segment_delay_ms == 1500
         assert config.proactive_prompt == ""
