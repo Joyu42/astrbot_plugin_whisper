@@ -49,8 +49,8 @@ def _cancel_all_session_jobs(scheduler, session_id: str):
     """Cancel whisper_check job for a session."""
     try:
         scheduler.remove_job(f"whisper_check_{session_id}")
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"[Whisper] 取消会话任务失败({session_id}): {e}")
 
 
 def _cancel_all_checks(scheduler):
@@ -59,13 +59,13 @@ def _cancel_all_checks(scheduler):
         if job.id.startswith("whisper_check_"):
             try:
                 scheduler.remove_job(job.id)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[Whisper] 取消任务失败({job.id}): {e}")
 
 
 def _schedule_check(scheduler, session_id: str, delay_seconds: int):
     _cancel_check_job(scheduler, session_id)
-    run_date = datetime.now() + timedelta(seconds=delay_seconds)
+    run_date = datetime.now(scheduler.timezone) + timedelta(seconds=delay_seconds)
     scheduler.add_job(
         func=_on_check_timeout_wrapper,
         trigger=DateTrigger(run_date=run_date),
@@ -78,8 +78,8 @@ def _schedule_check(scheduler, session_id: str, delay_seconds: int):
 def _cancel_check_job(scheduler, session_id: str):
     try:
         scheduler.remove_job(f"whisper_check_{session_id}")
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"[Whisper] 取消检查任务失败({session_id}): {e}")
 
 
 # Global reference to plugin instance for scheduler callbacks
@@ -168,8 +168,15 @@ def _save_sessions_sync(sessions: dict, data_dir: Optional[str] = None):
     # Ensure directory exists
     os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
 
+    temp_path = f"{file_path}.tmp"
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, file_path)
     except Exception as e:
         logger.warning(f"[Whisper] 保存会话数据失败: {e}")
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass

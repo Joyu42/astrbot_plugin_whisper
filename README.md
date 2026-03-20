@@ -34,12 +34,8 @@ Whisper 是一款基于对话感知的私聊主动消息插件，适用于 AstrB
 ```yaml
 mcp_enabled: true
 mcp_services:
-  - name: "spotify"
-    command: "npx"
-    args: ["-y", "@modelcontextprotocol/server-spotify"]
-    env:
-      SPOTIFY_CLIENT_ID: "your_client_id"
-      SPOTIFY_CLIENT_SECRET: "your_client_secret"
+  - "spotify"
+spotify_mcp_command: "node data/mcp_servers/spotify-mcp-server/build/index.js"
 ```
 
 ### 注意事项
@@ -60,7 +56,8 @@ mcp_services:
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `enable` | bool | true | 启用 Whisper 主动消息功能 |
-| `timeout_min` | int | 5 | 最小沉默超时（分钟） |
+| `llm_provider_id` | string | "" | 主动消息生成使用的 LLM 提供商（留空使用当前会话模型） |
+| `silence_trigger_minutes` | int | 5 | 用户沉默触发检查时间（分钟） |
 | `timeout_max` | int | 30 | 最大沉默超时（分钟） |
 | `max_consecutive` | int | 3 | 最大连续主动消息数 |
 | `quiet_hours_enabled` | bool | true | 启用安静时段 |
@@ -68,13 +65,19 @@ mcp_services:
 | `quiet_hours_end` | string | "08:00" | 安静时段结束时间 |
 | `max_history_messages` | int | 20 | 发给 LLM 的最大历史消息数 |
 | `segment_enabled` | bool | true | 启用分段发送 |
-| `segment_max_length` | int | 100 | 分段最大字符数 |
+| `segment_threshold` | int | 150 | 不分段字数阈值（超过此值不分段） |
+| `segment_mode` | string | "regex" | 分段模式（`regex` / `words`） |
+| `segment_regex` | string | `.*?[。？！~…\n]+|.+$` | 正则分段规则（`segment_mode=regex`） |
+| `segment_words` | string | "。！？～…\n" | 分段词列表（`segment_mode=words`） |
 | `segment_delay_ms` | int | 1500 | 分段发送间隔（毫秒） |
 | `proactive_prompt` | text | (见配置页面) | 主动消息判断提示词模板 |
-| `session_configs` | object | {} | 每会话独立配置 |
 | `mcp_enabled` | bool | false | 启用 MCP 状态感知 |
-| `mcp_services` | list | [] | MCP 服务列表（需自行运行 MCP 服务器） |
-| `mcp_status_check_interval` | int | 60 | MCP 状态检查间隔（秒） |
+| `mcp_services` | list | [] | MCP 服务列表（当前支持填 `spotify`） |
+| `spotify_context_enabled` | bool | false | 启用 Spotify 播放状态上下文 |
+| `spotify_suggest_enabled` | bool | false | 启用 Spotify 推荐建议附加 |
+| `spotify_mcp_command` | string | `node data/mcp_servers/spotify-mcp-server/build/index.js` | Spotify MCP 服务器启动命令 |
+
+兼容性说明：历史配置里的 `timeout_min` 仍被兼容读取，但推荐使用 `silence_trigger_minutes`。
 
 ## 命令说明
 

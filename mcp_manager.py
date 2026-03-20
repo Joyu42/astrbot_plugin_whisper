@@ -17,6 +17,16 @@ class MCPManager:
         """Initialize the MCP manager."""
         self._services: dict[str, MCPService] = {}
 
+    @staticmethod
+    def _service_name(entry: object) -> str:
+        if isinstance(entry, str):
+            return entry.strip().lower()
+        if isinstance(entry, dict):
+            name = entry.get("name") or entry.get("service")
+            if isinstance(name, str):
+                return name.strip().lower()
+        return ""
+
     async def load_services(self, config: WhisperConfig) -> None:
         """Load and start MCP services based on configuration.
 
@@ -26,8 +36,9 @@ class MCPManager:
         if not config.mcp_enabled:
             return
 
-        for service_name in config.mcp_services:
-            if "spotify" in service_name:
+        for entry in config.mcp_services:
+            service_name = self._service_name(entry)
+            if service_name == "spotify":
                 command = shlex.split(config.spotify_mcp_command)
                 service = SpotifyMCPService(command)
                 self._services["spotify"] = service

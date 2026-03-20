@@ -2,11 +2,14 @@
 
 import re
 import traceback
-from typing import TYPE_CHECKING, Any
+import time
+from typing import Any
 
 from astrbot.api import logger
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+from .mcp_service import MCPService
 
 
 def _parse_markdown_now_playing(text: str) -> dict | None:
@@ -38,7 +41,7 @@ def _parse_markdown_now_playing(text: str) -> dict | None:
     return result
 
 
-class SpotifyMCPService:
+class SpotifyMCPService(MCPService):
     """Spotify MCP service implementation."""
 
     def __init__(self, command: list[str]) -> None:
@@ -50,6 +53,9 @@ class SpotifyMCPService:
         self.command = command
         self._cmd = command[0]
         self._args = command[1:]
+        self._cached_context: str = ""
+        self._cached_context_at: float = 0.0
+        self._cache_ttl_seconds: float = 10.0
 
     async def start(self) -> None:
         """Start the MCP service. No-op for local context manager approach."""
@@ -67,6 +73,10 @@ class SpotifyMCPService:
         """
         import os
 
+        now = time.monotonic()
+        if self._cached_context_at and now - self._cached_context_at < self._cache_ttl_seconds:
+            return self._cached_context
+
         # 使用 AstrBot 工作目录作为 cwd，确保 MCP server 能找到相对路径的配置文件
         astrbot_cwd = os.getcwd()
         server_params = StdioServerParameters(
@@ -82,8 +92,9 @@ class SpotifyMCPService:
                     # The result structure depends on the MCP server implementation
                     if hasattr(result, "content"):
                         for content in result.content:
-                            if hasattr(content, "text") and content.text:
-                                text = content.text.strip()
+                            text_raw = getattr(content, "text", None)
+                            if isinstance(text_raw, str) and text_raw:
+                                text = text_raw.strip()
                                 import json
 
                                 # 尝试 JSON 解析
@@ -97,6 +108,8 @@ class SpotifyMCPService:
                                         artist = data.get("artist", "Unknown")
                                         device = data.get("device", "Unknown")
                                         context_str = f"用户当前正在听 Spotify: {name} - {artist} (在设备 {device} 上)"
+                                        self._cached_context = context_str
+                                        self._cached_context_at = time.monotonic()
                                         logger.info(
                                             f"[Whisper] Spotify 解析成功 (JSON): {name} - {artist}"
                                         )
@@ -113,6 +126,8 @@ class SpotifyMCPService:
                                     artist = parsed.get("artist", "Unknown")
                                     device = parsed.get("device", "Unknown")
                                     context_str = f"用户当前正在听 Spotify: {name} - {artist} (在设备 {device} 上)"
+                                    self._cached_context = context_str
+                                    self._cached_context_at = time.monotonic()
                                     logger.info(
                                         f"[Whisper] Spotify 解析成功 (Markdown): {name} - {artist}"
                                     )
@@ -122,11 +137,15 @@ class SpotifyMCPService:
                                     f"[Whisper] Spotify MCP 返回无法解析的文本: {text[:200]}"
                                 )
                     logger.info("[Whisper] Spotify 当前未在播放")
+                    self._cached_context = ""
+                    self._cached_context_at = time.monotonic()
                     return ""
         except Exception as e:
             logger.warning(
                 f"[Whisper] Spotify MCP 调用失败: {e}\n{traceback.format_exc()}"
             )
+            self._cached_context = ""
+            self._cached_context_at = time.monotonic()
             return ""
 
     def format_suggestion(self, action: dict[str, Any]) -> str:

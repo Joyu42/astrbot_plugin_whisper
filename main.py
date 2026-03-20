@@ -33,6 +33,7 @@ from .utils import (
     get_quiet_hours_end_delay,
     get_silence_trigger_delay,
     should_send_proactive,
+    extract_safe_message_content,
     compute_backoff_minutes,
     apply_jitter,
     replace_prompt_placeholders,
@@ -82,7 +83,7 @@ class WhisperPlugin(Star):
         # Load persisted sessions
         try:
             data_dir = StarTools.get_data_dir("astrbot_plugin_whisper")
-            self._sessions = _load_sessions_sync(data_dir)
+            self._sessions = await asyncio.to_thread(_load_sessions_sync, data_dir)
         except Exception as e:
             logger.warning(f"[Whisper] 加载会话数据失败: {e}")
             self._sessions = {}
@@ -129,7 +130,7 @@ class WhisperPlugin(Star):
         # Save sessions
         try:
             data_dir = StarTools.get_data_dir("astrbot_plugin_whisper")
-            _save_sessions_sync(self._sessions, data_dir)
+            await asyncio.to_thread(_save_sessions_sync, self._sessions, data_dir)
             logger.info(f"[Whisper] 已保存 {len(self._sessions)} 个会话状态")
         except Exception as e:
             logger.warning(f"[Whisper] 保存会话数据失败: {e}")
@@ -149,7 +150,7 @@ class WhisperPlugin(Star):
         async with self._save_lock:
             try:
                 data_dir = StarTools.get_data_dir("astrbot_plugin_whisper")
-                _save_sessions_sync(self._sessions, data_dir)
+                await asyncio.to_thread(_save_sessions_sync, self._sessions, data_dir)
             except Exception as e:
                 logger.warning(f"[Whisper] 保存会话失败: {e}")
 
@@ -187,9 +188,6 @@ class WhisperPlugin(Star):
             trigger_time = datetime.now() + timedelta(seconds=delay)
             state.next_trigger_time = time.time() + delay
             _schedule_check(self.scheduler, session_id, delay)
-            # Persist state
-            data_dir = StarTools.get_data_dir("astrbot_plugin_whisper")
-            _save_sessions_sync(self._sessions, data_dir)
             delay_min = delay // 60
             logger.info(
                 f"[Whisper] 用户发送消息，将于 {delay_min} 分钟后 {trigger_time.strftime('%H:%M')} 进行下次检查。"
@@ -198,7 +196,12 @@ class WhisperPlugin(Star):
 
         # Don't block event propagation
 
-    async def _send_message(self, session_id: str, decision: LLMDecision):
+    async def _send_message(
+        self,
+        session_id: str,
+        decision: LLMDecision,
+        config: Optional[WhisperConfig] = None,
+    ) -> bool:
         """Send message with segmentation support.
 
         Follows proactive_chat reference plugin patterns for message sending
@@ -207,7 +210,8 @@ class WhisperPlugin(Star):
         content = decision.content
         prompt = decision.prompt
 
-        config = parse_config(self.raw_config, session_id)
+        if config is None:
+            config = parse_config(self.raw_config, session_id)
         state = self._get_session(session_id)
 
         logger.debug(f"[Whisper] 发送主动消息至 {session_id}")
@@ -217,6 +221,10 @@ class WhisperPlugin(Star):
 
         # Segment if enabled
         if config.segment_enabled:
+            if len(content) > config.segment_threshold:
+                logger.debug(
+                    f"[Whisper] 分段跳过: len={len(content)} > threshold={config.segment_threshold}, 直接整段发送"
+                )
             segments = _segment_text(
                 content,
                 config.segment_threshold,
@@ -226,17 +234,19 @@ class WhisperPlugin(Star):
             )
             logger.debug(
                 f"[Whisper] 分段结果: 原始长度={len(content)}, 阈值={config.segment_threshold}, "
-                f"分段数={len(segments)}"
+                f"模式={config.segment_mode}, 分段数={len(segments)}"
             )
         else:
             segments = [content]
             logger.debug("[Whisper] 分段已禁用")
 
         # Send each segment (matching reference plugin: MessageChain([Plain(text=...)]))
+        sent_segments = 0
         for idx, segment in enumerate(segments):
             try:
                 chain = MessageChain([Plain(text=segment)])
                 await self.context.send_message(session_id, chain)
+                sent_segments += 1
 
                 # Delay between segments (not after last)
                 if idx < len(segments) - 1 and config.segment_delay_ms > 0:
@@ -244,6 +254,9 @@ class WhisperPlugin(Star):
             except Exception as e:
                 logger.error(f"[Whisper] 消息发送失败: {e}")
                 break
+
+        if sent_segments != len(segments):
+            return False
 
         # Update state
         state.unanswered_count += 1
@@ -277,11 +290,11 @@ class WhisperPlugin(Star):
         )
         state.next_trigger_time = time.time() + delay
         _schedule_check(self.scheduler, session_id, delay)
-        data_dir = StarTools.get_data_dir("astrbot_plugin_whisper")
-        _save_sessions_sync(self._sessions, data_dir)
+        await self._save_session(session_id)
+        return True
 
     async def _get_filtered_history(
-        self, session_id: str
+        self, session_id: str, config: WhisperConfig
     ) -> tuple[list, str, Optional[str]]:
         """Get filtered conversation history for LLM calls.
 
@@ -369,7 +382,6 @@ class WhisperPlugin(Star):
         # Skip: tool, system, function roles
         # Skip: any message with tool_calls (both assistant with tool_calls and their tool responses)
         filtered_history = []
-        config = parse_config(self.raw_config, session_id)
         messages = pure_history_messages[-config.max_history_messages :]
 
         for msg in messages:
@@ -414,7 +426,7 @@ class WhisperPlugin(Star):
             return
 
         filtered_history, persona_prompt, _ = await self._get_filtered_history(
-            session_id
+            session_id, config
         )
         # Get MCP context
         additional_context = await self.mcp_manager.get_combined_context(config)
@@ -460,14 +472,33 @@ class WhisperPlugin(Star):
                 f"reason={decision.reason}"
             )
 
+        if decision and decision.should_send is True:
+            decision.content = extract_safe_message_content(decision.content)
+            if not decision.content.strip():
+                decision.should_send = False
+                if not decision.reason:
+                    decision.reason = "unsafe_content"
+
         if decision and decision.should_send is True and decision.content.strip():
+            can_send_now, guard_reason_now = should_send_proactive(config, state)
+            if not can_send_now:
+                if guard_reason_now == "quiet_hours":
+                    delay = get_quiet_hours_end_delay(config)
+                    if delay > 0:
+                        state.next_trigger_time = time.time() + delay
+                        _schedule_check(self.scheduler, session_id, delay)
+                return
+
             # Format suggestion from MCP services
             suggestion = self.mcp_manager.format_combined_suggestions(decision)
             if suggestion and config.spotify_suggest_enabled:
                 decision.content += suggestion
-            await self._send_message(session_id, decision)
-            state.backoff_level = 0
-            return
+            sent_ok = await self._send_message(session_id, decision, config)
+            if sent_ok:
+                state.backoff_level = 0
+                return
+            if not decision.reason:
+                decision.reason = "send_failed"
 
         # Backoff scheduling (should_send=False or parse failed)
         base = config.silence_trigger_minutes
@@ -508,9 +539,7 @@ class WhisperPlugin(Star):
         delay = get_silence_trigger_delay(config)
         state.next_trigger_time = time.time() + delay
         _schedule_check(self.scheduler, session_id, delay)
-        # Persist state
-        data_dir = StarTools.get_data_dir("astrbot_plugin_whisper")
-        _save_sessions_sync(self._sessions, data_dir)
+        await self._save_session(session_id)
         yield event.plain_result("✅ Whisper 已启用")
 
     @filter.command("whisper_off")

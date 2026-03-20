@@ -153,6 +153,38 @@ class TestMCPManager:
         assert len(manager._services) == 0
 
     @pytest.mark.asyncio
+    async def test_load_services_supports_dict_entry(self, monkeypatch):
+        """Test load_services supports dict-form mcp_services entries."""
+
+        class DummySpotifyService:
+            def __init__(self, command):
+                self.command = command
+                self.start = AsyncMock()
+                self.stop = AsyncMock()
+
+            async def get_context(self):
+                return ""
+
+            def format_suggestion(self, action):
+                return ""
+
+        monkeypatch.setattr(
+            "astrbot_plugin_whisper.mcp_manager.SpotifyMCPService", DummySpotifyService
+        )
+
+        manager = MCPManager()
+        config = WhisperConfig(
+            mcp_enabled=True,
+            mcp_services=[{"name": "spotify"}],
+            spotify_mcp_command="node mock.js",
+        )
+
+        await manager.load_services(config)
+
+        assert "spotify" in manager._services
+        assert manager._services["spotify"].command == ["node", "mock.js"]
+
+    @pytest.mark.asyncio
     async def test_stop_all(self):
         """Test stop_all stops all services."""
         # Create mock services

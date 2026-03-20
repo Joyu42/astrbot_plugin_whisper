@@ -41,10 +41,12 @@ from astrbot_plugin_whisper.models import (
 # Import from utils module
 from astrbot_plugin_whisper.utils import (
     is_quiet_hours,
+    get_quiet_hours_end_delay,
     get_silence_trigger_delay,
     should_send_proactive,
     replace_prompt_placeholders,
     _parse_content_response,
+    extract_safe_message_content,
     _segment_text,
     _format_status_message,
     _build_proactive_prompt,
@@ -353,6 +355,30 @@ class TestQuietHours:
             mock_datetime.now.return_value = datetime(2024, 1, 1, 12, 1)
             assert is_quiet_hours(config) is False
 
+    def test_quiet_hours_end_delay_same_day(self):
+        """get_quiet_hours_end_delay returns the remaining time on the same day."""
+        config = WhisperConfig(
+            quiet_hours_enabled=True,
+            quiet_hours_start="10:00",
+            quiet_hours_end="12:00",
+        )
+
+        with patch("astrbot_plugin_whisper.utils.datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2024, 1, 1, 11, 30)
+            assert get_quiet_hours_end_delay(config) == 1800
+
+    def test_quiet_hours_end_delay_cross_midnight(self):
+        """get_quiet_hours_end_delay handles cross-midnight ranges."""
+        config = WhisperConfig(
+            quiet_hours_enabled=True,
+            quiet_hours_start="23:00",
+            quiet_hours_end="08:00",
+        )
+
+        with patch("astrbot_plugin_whisper.utils.datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2024, 1, 1, 2, 0)
+            assert get_quiet_hours_end_delay(config) == 21600
+
 
 # ===== Test Silence Trigger Delay =====
 
@@ -537,6 +563,26 @@ class TestContentParsing:
         assert result.reason == "missing_should_send"
 
 
+class TestSafeMessageContent:
+    def test_safe_message_plain_text_kept(self):
+        raw = "最近怎么样？"
+        assert extract_safe_message_content(raw) == "最近怎么样？"
+
+    def test_safe_message_extracts_content_from_decision_json(self):
+        raw = '{"should_send": true, "content": "你好呀", "reason": "greet"}'
+        assert extract_safe_message_content(raw) == "你好呀"
+
+    def test_safe_message_extracts_content_from_fenced_json(self):
+        raw = (
+            '```json\n{"should_send": true, "content": "晚安", "reason": "sleep"}\n```'
+        )
+        assert extract_safe_message_content(raw) == "晚安"
+
+    def test_safe_message_blocks_malformed_decision_like_json(self):
+        raw = '{"should_send": true, "content": "hi",}'
+        assert extract_safe_message_content(raw) == ""
+
+
 class TestBackoffHelpers:
     def test_compute_backoff_minutes_exponential_with_cap(self):
         """compute_backoff_minutes should grow exponentially and clamp to cap."""
@@ -631,6 +677,7 @@ class TestSegmentText:
         text = "你好啊。最近怎么样？我这边一切都好。有时间一起吃饭吗？"
         # 34 chars - below threshold 50, try to segment
         result = _segment_text(text, 50)
+        assert len(result) >= 2
         # Each segment should be <= threshold
         for segment in result:
             assert len(segment) <= 50
@@ -651,7 +698,7 @@ class TestSegmentText:
         """_segment_text returns text as-is when below threshold."""
         text = "Hello"
         result = _segment_text(text, 100)
-        assert len(result) >= 1  # May be segmented or not depending on content
+        assert result == ["Hello"]
 
 
 # ===== Test Session Persistence =====
@@ -716,6 +763,38 @@ class TestSessionPersistence:
 
         assert "user_1" in loaded
         assert loaded["user_1"].session_id == "user_1"
+
+    def test_save_sessions_preserves_previous_file_on_dump_error(self, tmp_path):
+        file_path = os.path.join(str(tmp_path), "session_data.json")
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "user_prev": {
+                        "session_id": "user_prev",
+                        "last_message_time": 1.0,
+                        "unanswered_count": 1,
+                    }
+                },
+                f,
+            )
+
+        sessions = {
+            "user_new": SessionState(
+                session_id="user_new",
+                last_message_time=2.0,
+                unanswered_count=0,
+            )
+        }
+
+        with patch(
+            "astrbot_plugin_whisper.scheduler.json.dump",
+            side_effect=RuntimeError("boom"),
+        ):
+            _save_sessions_sync(sessions, str(tmp_path))
+
+        loaded = _load_sessions_sync(str(tmp_path))
+        assert "user_prev" in loaded
+        assert loaded["user_prev"].session_id == "user_prev"
 
 
 # ===== Test Status Message =====

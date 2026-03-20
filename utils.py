@@ -51,7 +51,7 @@ def is_quiet_hours(config: WhisperConfig) -> bool:
     if not config.quiet_hours_enabled:
         return False
 
-    now = datetime.now()
+    now = datetime.now().astimezone()
     current_time = now.time()
 
     start_str = config.quiet_hours_start
@@ -85,7 +85,7 @@ def get_quiet_hours_end_delay(config: WhisperConfig) -> int:
     if not config.quiet_hours_enabled or not is_quiet_hours(config):
         return 0
 
-    now = datetime.now()
+    now = datetime.now().astimezone()
     current_time = now.time()
 
     end_str = config.quiet_hours_end
@@ -224,6 +224,34 @@ def _build_proactive_prompt(
 # ===== LLM Response Parsers =====
 
 
+def _build_decision_from_payload(data: object) -> Optional[LLMDecision]:
+    if not isinstance(data, dict):
+        return None
+
+    should_send = data.get("should_send")
+    if not isinstance(should_send, bool):
+        should_send = None
+
+    content = str(data.get("content", ""))
+    reason = str(data.get("reason", ""))
+    spotify_action = (
+        data.get("spotify_action")
+        if isinstance(data.get("spotify_action"), dict)
+        else None
+    )
+    if should_send is None:
+        reason = "missing_should_send"
+    elif should_send is True and not content:
+        reason = "empty_content"
+
+    return LLMDecision(
+        should_send=should_send,
+        content=content,
+        reason=reason,
+        spotify_action=spotify_action,
+    )
+
+
 def _parse_content_response(raw_text: str) -> LLMDecision:
     """
     Parse Phase 2 LLM response for content generation.
@@ -239,28 +267,9 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
 
     # Try direct JSON parse
     try:
-        data = json.loads(raw_text)
-        should_send = data.get("should_send")
-        if not isinstance(should_send, bool):
-            should_send = None
-
-        content = str(data.get("content", ""))
-        reason = str(data.get("reason", ""))
-        spotify_action = (
-            data.get("spotify_action")
-            if isinstance(data.get("spotify_action"), dict)
-            else None
-        )
-        if should_send is None:
-            reason = "missing_should_send"
-        elif should_send is True and not content:
-            reason = "empty_content"
-        return LLMDecision(
-            should_send=should_send,
-            content=content,
-            reason=reason,
-            spotify_action=spotify_action,
-        )
+        decision = _build_decision_from_payload(json.loads(raw_text))
+        if decision:
+            return decision
     except json.JSONDecodeError:
         pass
 
@@ -269,28 +278,10 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
     match = re.search(json_pattern, raw_text)
     if match:
         try:
-            data = json.loads(match.group(0))
-            should_send = data.get("should_send")
-            if not isinstance(should_send, bool):
-                should_send = None
-            content = str(data.get("content", ""))
-            reason = str(data.get("reason", ""))
-            spotify_action = (
-                data.get("spotify_action")
-                if isinstance(data.get("spotify_action"), dict)
-                else None
-            )
-            if should_send is None:
-                reason = "missing_should_send"
-            elif should_send is True and not content:
-                reason = "empty_content"
-            return LLMDecision(
-                should_send=should_send,
-                content=content,
-                reason=reason,
-                spotify_action=spotify_action,
-            )
-        except:
+            decision = _build_decision_from_payload(json.loads(match.group(0)))
+            if decision:
+                return decision
+        except (json.JSONDecodeError, TypeError, ValueError):
             pass
 
     # Last resort: try to match any JSON-like object
@@ -298,32 +289,68 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
     match = re.search(fallback_pattern, raw_text)
     if match:
         try:
-            data = json.loads(match.group(0))
-            should_send = data.get("should_send")
-            if not isinstance(should_send, bool):
-                should_send = None
-            content = str(data.get("content", ""))
-            reason = str(data.get("reason", ""))
-            spotify_action = (
-                data.get("spotify_action")
-                if isinstance(data.get("spotify_action"), dict)
-                else None
-            )
-            if should_send is None:
-                reason = "missing_should_send"
-            elif should_send is True and not content:
-                reason = "empty_content"
-            return LLMDecision(
-                should_send=should_send,
-                content=content,
-                reason=reason,
-                spotify_action=spotify_action,
-            )
-        except:
+            decision = _build_decision_from_payload(json.loads(match.group(0)))
+            if decision:
+                return decision
+        except (json.JSONDecodeError, TypeError, ValueError):
             pass
 
     # All parsing failed
     return LLMDecision(reason="json_parse_failed")
+
+
+def _strip_json_fence(text: str) -> str:
+    stripped = text.strip()
+    match = re.fullmatch(r"```(?:json|JSON)?\s*([\s\S]*?)\s*```", stripped)
+    if match:
+        return match.group(1).strip()
+    return stripped
+
+
+def _extract_content_from_payload(data: object) -> Optional[str]:
+    if not isinstance(data, dict) or "content" not in data:
+        return None
+    content = data.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if content is None:
+        return ""
+    return str(content).strip()
+
+
+def extract_safe_message_content(raw_text: str) -> str:
+    if not raw_text or not raw_text.strip():
+        return ""
+
+    cleaned = _strip_json_fence(raw_text)
+
+    try:
+        data = json.loads(cleaned)
+        content = _extract_content_from_payload(data)
+        if content is not None:
+            return content
+    except json.JSONDecodeError:
+        data = None
+
+    markers = ('"should_send"', '"content"', '"reason"', '"spotify_action"')
+    decision_like = any(marker in cleaned for marker in markers)
+    if decision_like and cleaned.startswith("{") and cleaned.endswith("}"):
+        return ""
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end > start:
+        candidate = cleaned[start : end + 1]
+        try:
+            data = json.loads(candidate)
+            content = _extract_content_from_payload(data)
+            if content is not None:
+                return content
+        except json.JSONDecodeError:
+            if any(marker in candidate for marker in markers):
+                return ""
+
+    return cleaned
 
 
 # ===== Text Processing =====
@@ -374,23 +401,21 @@ def _segment_text(
     text: str,
     threshold: int = 150,
     mode: str = "regex",
-    regex_pattern: str = r"([。？！~…\n])",
+    regex_pattern: str = r".*?[。？！~…\n]+|.+$",
     split_words: str = "。！？～…\n",
 ) -> list[str]:
     if not text:
         return []
 
-    # If text exceeds threshold, don't segment (long text - send as-is)
     if len(text) > threshold:
         return [text]
-
-    segments = []
-    max_len = threshold
 
     if mode == "regex":
         import re
 
-        parts = re.split(regex_pattern, text)
+        parts = re.findall(regex_pattern, text)
+        if not parts:
+            parts = [text]
     else:
         parts = []
         current = ""
@@ -402,30 +427,15 @@ def _segment_text(
         if current:
             parts.append(current)
 
-    rejoined = []
-    current = ""
-    for p in parts:
-        current += p
-        if p and p[-1] in "。？！~…\n":
-            rejoined.append(current)
-            current = ""
-    if current:
-        rejoined.append(current)
-
-    current = ""
-    for part in rejoined:
-        if len(current) + len(part) <= max_len:
-            current += part
-        else:
-            if current:
-                segments.append(current)
-            while len(part) > max_len:
-                segments.append(part[:max_len])
-                part = part[max_len:]
-            current = part
-
-    if current:
-        segments.append(current)
+    segments = []
+    for part in parts:
+        if not part:
+            continue
+        while len(part) > threshold:
+            segments.append(part[:threshold])
+            part = part[threshold:]
+        if part:
+            segments.append(part)
 
     return segments if segments else [text]
 
