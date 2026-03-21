@@ -269,8 +269,11 @@ class WhisperPlugin(Star):
                 session_id
             )
             if conv_id:
-                # Store the prompt as user message (like proactive_chat)
-                user_msg_obj = UserMessageSegment(content=[TextPart(text=prompt)])
+                # Store a neutral trigger marker instead of the JSON-oriented prompt
+                # to avoid contaminating the main chat context.
+                user_msg_obj = UserMessageSegment(
+                    content=[TextPart(text="[Whisper proactive trigger]")]
+                )
                 assistant_msg_obj = AssistantMessageSegment(
                     content=[TextPart(text=content)]
                 )

@@ -177,3 +177,43 @@ async def test_send_message_failure_does_not_mutate_state_or_archive():
     plugin.context.conversation_manager.add_message_pair.assert_not_called()
     plugin._save_session.assert_not_called()
     mock_schedule_check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_message_archives_neutral_trigger_not_prompt():
+    state = SessionState(session_id="session_3", last_message_time=time.time())
+
+    plugin = SimpleNamespace()
+    plugin.raw_config = {
+        "segment_enabled": False,
+        "silence_trigger_minutes": 5,
+        "timeout_max": 30,
+    }
+    plugin.scheduler = MagicMock()
+    plugin.context = MagicMock()
+    plugin.context.send_message = AsyncMock(return_value=None)
+    plugin.context.conversation_manager = MagicMock()
+    plugin.context.conversation_manager.get_curr_conversation_id = AsyncMock(
+        return_value="conv-2"
+    )
+    plugin.context.conversation_manager.add_message_pair = AsyncMock()
+    plugin._get_session = lambda _session_id: state
+    plugin._save_session = AsyncMock()
+
+    with patch("astrbot_plugin_whisper.main._schedule_check"):
+        await WhisperPlugin._send_message(
+            plugin,
+            "session_3",
+            LLMDecision(
+                content="hello",
+                prompt='{"should_send": true, "content": "x", "reason": "x"}',
+                should_send=True,
+            ),
+        )
+
+    _, kwargs = plugin.context.conversation_manager.add_message_pair.call_args
+    user_message = kwargs["user_message"]
+    assert (
+        user_message.content[0].text
+        != '{"should_send": true, "content": "x", "reason": "x"}'
+    )
