@@ -103,7 +103,7 @@ from astrbot_plugin_whisper.models import LLMDecision, SessionState
 
 @pytest.mark.asyncio
 async def test_execute_check_rechecks_quiet_hours_before_send():
-    state = SessionState(session_id="session_1", last_message_time=time.time())
+    state = SessionState(session_id="session_1", last_message_time=time.time() - 600)
 
     plugin = SimpleNamespace()
     plugin.raw_config = {
@@ -126,6 +126,7 @@ async def test_execute_check_rechecks_quiet_hours_before_send():
     plugin._get_session = lambda _session_id: state
     plugin._get_filtered_history = AsyncMock(return_value=([], "", None))
     plugin._send_message = AsyncMock()
+    plugin._save_session = AsyncMock()
 
     with (
         patch(
@@ -142,6 +143,112 @@ async def test_execute_check_rechecks_quiet_hours_before_send():
     plugin._send_message.assert_not_called()
     mock_schedule_check.assert_called_once_with(plugin.scheduler, "session_1", 120)
     assert state.next_trigger_time > 0
+    plugin._save_session.assert_called_once_with("session_1")
+
+
+@pytest.mark.asyncio
+async def test_execute_check_reschedules_if_silence_window_not_reached():
+    state = SessionState(session_id="session_4", last_message_time=time.time() - 60)
+
+    plugin = SimpleNamespace()
+    plugin.raw_config = {
+        "enable": True,
+        "quiet_hours_enabled": False,
+        "silence_trigger_minutes": 5,
+        "timeout_max": 30,
+    }
+    plugin.scheduler = MagicMock()
+    plugin._get_session = lambda _session_id: state
+    plugin._save_session = AsyncMock()
+    plugin._get_filtered_history = AsyncMock()
+
+    with patch("astrbot_plugin_whisper.main._schedule_check") as mock_schedule_check:
+        await WhisperPlugin._execute_check(plugin, "session_4")
+
+    plugin._get_filtered_history.assert_not_called()
+    mock_schedule_check.assert_called_once()
+    scheduled_delay = mock_schedule_check.call_args.args[2]
+    assert 200 <= scheduled_delay <= 241
+    assert state.next_trigger_time > time.time()
+    plugin._save_session.assert_called_once_with("session_4")
+
+
+@pytest.mark.asyncio
+async def test_execute_check_rechecks_silence_window_before_send():
+    initial_last_message_time = time.time() - 600
+    state = SessionState(
+        session_id="session_5", last_message_time=initial_last_message_time
+    )
+
+    plugin = SimpleNamespace()
+    plugin.raw_config = {
+        "enable": True,
+        "quiet_hours_enabled": False,
+        "silence_trigger_minutes": 5,
+        "timeout_max": 30,
+    }
+    plugin.scheduler = MagicMock()
+    plugin.mcp_manager = MagicMock()
+    plugin.mcp_manager.get_combined_context = AsyncMock(return_value="")
+    plugin.mcp_manager.format_combined_suggestions = MagicMock(return_value="")
+    plugin.context = MagicMock()
+    plugin.context.get_current_chat_provider_id = AsyncMock(return_value="provider_1")
+
+    async def _llm_generate(*_args, **_kwargs):
+        state.last_message_time = time.time()
+        return SimpleNamespace(
+            completion_text='{"should_send": true, "content": "hello", "reason": "ok"}'
+        )
+
+    plugin.context.llm_generate = AsyncMock(side_effect=_llm_generate)
+    plugin._get_session = lambda _session_id: state
+    plugin._get_filtered_history = AsyncMock(return_value=([], "", None))
+    plugin._send_message = AsyncMock()
+    plugin._save_session = AsyncMock()
+
+    with patch("astrbot_plugin_whisper.main._schedule_check") as mock_schedule_check:
+        await WhisperPlugin._execute_check(plugin, "session_5")
+
+    plugin._send_message.assert_not_called()
+    mock_schedule_check.assert_called_once()
+    assert state.next_trigger_time > time.time()
+    plugin._save_session.assert_called_once_with("session_5")
+
+
+@pytest.mark.asyncio
+async def test_execute_check_saves_backoff_state_when_not_sending():
+    state = SessionState(session_id="session_6", last_message_time=time.time() - 600)
+
+    plugin = SimpleNamespace()
+    plugin.raw_config = {
+        "enable": True,
+        "quiet_hours_enabled": False,
+        "silence_trigger_minutes": 5,
+        "timeout_max": 30,
+    }
+    plugin.scheduler = MagicMock()
+    plugin.mcp_manager = MagicMock()
+    plugin.mcp_manager.get_combined_context = AsyncMock(return_value="")
+    plugin.context = MagicMock()
+    plugin.context.get_current_chat_provider_id = AsyncMock(return_value="provider_1")
+    plugin.context.llm_generate = AsyncMock(
+        return_value=SimpleNamespace(
+            completion_text='{"should_send": false, "content": "", "reason": "no"}'
+        )
+    )
+    plugin._get_session = lambda _session_id: state
+    plugin._get_filtered_history = AsyncMock(return_value=([], "", None))
+    plugin._save_session = AsyncMock()
+
+    with (
+        patch("astrbot_plugin_whisper.main._schedule_check"),
+        patch("astrbot_plugin_whisper.main.apply_jitter", return_value=300),
+    ):
+        await WhisperPlugin._execute_check(plugin, "session_6")
+
+    assert state.backoff_level == 1
+    assert state.next_trigger_time > time.time()
+    plugin._save_session.assert_called_once_with("session_6")
 
 
 @pytest.mark.asyncio
@@ -217,3 +324,45 @@ async def test_send_message_archives_neutral_trigger_not_prompt():
         user_message.content[0].text
         != '{"should_send": true, "content": "x", "reason": "x"}'
     )
+
+
+@pytest.mark.asyncio
+async def test_send_message_stops_segments_if_user_replies_during_send():
+    state = SessionState(session_id="session_7", last_message_time=time.time())
+
+    plugin = SimpleNamespace()
+    plugin.raw_config = {
+        "segment_enabled": True,
+        "segment_threshold": 50,
+        "segment_delay_ms": 0,
+        "silence_trigger_minutes": 5,
+        "timeout_max": 30,
+    }
+    plugin.scheduler = MagicMock()
+    plugin.context = MagicMock()
+
+    async def _send_first_segment(*_args, **_kwargs):
+        state.last_message_time = time.time()
+
+    plugin.context.send_message = AsyncMock(side_effect=_send_first_segment)
+    plugin.context.conversation_manager = MagicMock()
+    plugin.context.conversation_manager.get_curr_conversation_id = AsyncMock(
+        return_value="conv-3"
+    )
+    plugin.context.conversation_manager.add_message_pair = AsyncMock()
+    plugin._get_session = lambda _session_id: state
+    plugin._save_session = AsyncMock()
+
+    with patch("astrbot_plugin_whisper.main._schedule_check") as mock_schedule_check:
+        result = await WhisperPlugin._send_message(
+            plugin,
+            "session_7",
+            LLMDecision(content="你好。再聊一句？", prompt="p", should_send=True),
+        )
+
+    assert result is True
+    assert plugin.context.send_message.call_count == 1
+    assert state.unanswered_count == 0
+    plugin.context.conversation_manager.add_message_pair.assert_not_called()
+    plugin._save_session.assert_not_called()
+    mock_schedule_check.assert_not_called()

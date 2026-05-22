@@ -562,6 +562,32 @@ class TestContentParsing:
         assert result.should_send is None
         assert result.reason == "missing_should_send"
 
+    def test_parse_content_accepts_fenced_json_with_nested_action(self):
+        """LLM responses often wrap JSON in a markdown fence."""
+        raw = (
+            '```json\n{"should_send": true, "content": "hi", "reason": "ok", '
+            '"spotify_action": {"type": "recommend", "query": "jazz"}}\n```'
+        )
+
+        result = _parse_content_response(raw)
+
+        assert result.should_send is True
+        assert result.content == "hi"
+        assert result.spotify_action == {"type": "recommend", "query": "jazz"}
+
+    def test_parse_content_extracts_balanced_json_with_nested_action(self):
+        """LLM responses with leading text should still parse the JSON object."""
+        raw = (
+            '好的：{"should_send": true, "content": "hi", "reason": "ok", '
+            '"spotify_action": {"type": "recommend", "query": "jazz"}}'
+        )
+
+        result = _parse_content_response(raw)
+
+        assert result.should_send is True
+        assert result.content == "hi"
+        assert result.spotify_action == {"type": "recommend", "query": "jazz"}
+
 
 class TestSafeMessageContent:
     def test_safe_message_plain_text_kept(self):

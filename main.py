@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import time
 from datetime import datetime, timedelta
 import inspect
@@ -29,14 +30,12 @@ from .models import (
 )
 from .mcp_manager import MCPManager
 from .utils import (
-    is_quiet_hours,
     get_quiet_hours_end_delay,
     get_silence_trigger_delay,
     should_send_proactive,
     extract_safe_message_content,
     compute_backoff_minutes,
     apply_jitter,
-    replace_prompt_placeholders,
     _build_proactive_prompt,
     _parse_content_response,
     _segment_text,
@@ -48,14 +47,31 @@ from .scheduler import (
     _cancel_all_session_jobs,
     _cancel_all_checks,
     _set_plugin_instance,
-    _get_data_file_path,
     _save_sessions_sync,
     _load_sessions_sync,
-    _plugin_instance,
 )
 
 
 # ===== WhisperPlugin Main Class =====
+
+
+def _seconds_until_silence_ready(state: SessionState, config: WhisperConfig) -> int:
+    delay = get_silence_trigger_delay(config)
+    elapsed = time.time() - state.last_message_time
+    remaining = delay - elapsed
+    if remaining <= 0:
+        return 0
+    return max(math.ceil(remaining), 1)
+
+
+async def _reschedule_check(
+    plugin, session_id: str, state: SessionState, delay_seconds: int
+):
+    delay = max(int(delay_seconds), 1)
+    state.next_trigger_time = time.time() + delay
+    if plugin.scheduler:
+        _schedule_check(plugin.scheduler, session_id, delay)
+    await plugin._save_session(session_id)
 
 
 @register(
@@ -181,18 +197,22 @@ class WhisperPlugin(Star):
         # Get config for this session
         config = parse_config(self.raw_config, session_id)
 
-        if state.enabled:
+        if state.enabled and config.enable:
             state.backoff_level = 0
 
             delay = get_silence_trigger_delay(config)
             trigger_time = datetime.now() + timedelta(seconds=delay)
             state.next_trigger_time = time.time() + delay
-            _schedule_check(self.scheduler, session_id, delay)
+            if self.scheduler:
+                _schedule_check(self.scheduler, session_id, delay)
             delay_min = delay // 60
             logger.info(
                 f"[Whisper] 用户发送消息，将于 {delay_min} 分钟后 {trigger_time.strftime('%H:%M')} 进行下次检查。"
             )
-            await self._save_session(session_id)
+        else:
+            state.next_trigger_time = 0
+
+        await self._save_session(session_id)
 
         # Don't block event propagation
 
@@ -213,6 +233,7 @@ class WhisperPlugin(Star):
         if config is None:
             config = parse_config(self.raw_config, session_id)
         state = self._get_session(session_id)
+        last_message_time_at_start = state.last_message_time
 
         logger.debug(f"[Whisper] 发送主动消息至 {session_id}")
         logger.debug(
@@ -244,6 +265,9 @@ class WhisperPlugin(Star):
         sent_segments = 0
         for idx, segment in enumerate(segments):
             try:
+                if state.last_message_time != last_message_time_at_start:
+                    logger.info("[Whisper] 发送主动消息期间收到用户新消息，停止后续分段。")
+                    return True
                 chain = MessageChain([Plain(text=segment)])
                 await self.context.send_message(session_id, chain)
                 sent_segments += 1
@@ -310,7 +334,6 @@ class WhisperPlugin(Star):
         Returns:
             Tuple of (filtered_history, persona_prompt, conv_id)
         """
-        history_text = ""
         pure_history_messages = []
         persona_prompt = ""
         conv_id = None
@@ -391,11 +414,9 @@ class WhisperPlugin(Star):
             if isinstance(msg, dict):
                 role = msg.get("role", "")
                 tool_calls = msg.get("tool_calls", [])
-                tool_call_id = msg.get("tool_call_id", "")
             else:
                 role = getattr(msg, "role", "")
                 tool_calls = getattr(msg, "tool_calls", [])
-                tool_call_id = getattr(msg, "tool_call_id", "")
 
             # Skip tool/system/function roles
             if role in ("tool", "system", "function"):
@@ -417,15 +438,24 @@ class WhisperPlugin(Star):
         config = parse_config(self.raw_config, session_id)
         state = self._get_session(session_id)
 
-        now_ts = time.time()
         can_send, guard_reason = should_send_proactive(config, state)
         if not can_send:
             if guard_reason == "quiet_hours":
                 delay = get_quiet_hours_end_delay(config)
                 if delay > 0:
-                    state.next_trigger_time = now_ts + delay
-                    _schedule_check(self.scheduler, session_id, delay)
-                return
+                    await _reschedule_check(self, session_id, state, delay)
+                    return
+            state.next_trigger_time = 0
+            await self._save_session(session_id)
+            return
+
+        remaining_silence = _seconds_until_silence_ready(state, config)
+        if remaining_silence > 0:
+            logger.info(
+                f"[Whisper] 会话 {session_id} 尚未达到沉默触发时间，"
+                f"将在 {remaining_silence} 秒后重新检查。"
+            )
+            await _reschedule_check(self, session_id, state, remaining_silence)
             return
 
         filtered_history, persona_prompt, _ = await self._get_filtered_history(
@@ -488,8 +518,20 @@ class WhisperPlugin(Star):
                 if guard_reason_now == "quiet_hours":
                     delay = get_quiet_hours_end_delay(config)
                     if delay > 0:
-                        state.next_trigger_time = time.time() + delay
-                        _schedule_check(self.scheduler, session_id, delay)
+                        await _reschedule_check(self, session_id, state, delay)
+                        return
+                state.next_trigger_time = 0
+                await self._save_session(session_id)
+                return
+
+            remaining_silence_now = _seconds_until_silence_ready(state, config)
+            if remaining_silence_now > 0:
+                logger.info(
+                    f"[Whisper] LLM 决策期间收到新消息，将在 {remaining_silence_now} 秒后重新检查。"
+                )
+                await _reschedule_check(
+                    self, session_id, state, remaining_silence_now
+                )
                 return
 
             # Format suggestion from MCP services
@@ -499,6 +541,7 @@ class WhisperPlugin(Star):
             sent_ok = await self._send_message(session_id, decision, config)
             if sent_ok:
                 state.backoff_level = 0
+                await self._save_session(session_id)
                 return
             if not decision.reason:
                 decision.reason = "send_failed"
@@ -511,12 +554,14 @@ class WhisperPlugin(Star):
         )
         state.backoff_level += 1
         delay_seconds = apply_jitter(delay_minutes * 60)
-        state.next_trigger_time = now_ts + delay_seconds
-        _schedule_check(self.scheduler, session_id, delay_seconds)
+        state.next_trigger_time = time.time() + delay_seconds
+        if self.scheduler:
+            _schedule_check(self.scheduler, session_id, delay_seconds)
         next_time = datetime.now() + timedelta(seconds=delay_seconds)
         logger.info(
             f"[Whisper] 不发送主动消息，将于 {delay_minutes} 分钟后 {next_time.strftime('%H:%M')} 进行下次检查。"
         )
+        await self._save_session(session_id)
 
     # ===== Commands =====
 

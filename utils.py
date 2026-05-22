@@ -265,20 +265,20 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
     if not raw_text or not raw_text.strip():
         return LLMDecision(reason="empty_response")
 
+    cleaned = _strip_json_fence(raw_text)
+
     # Try direct JSON parse
     try:
-        decision = _build_decision_from_payload(json.loads(raw_text))
+        decision = _build_decision_from_payload(json.loads(cleaned))
         if decision:
             return decision
     except json.JSONDecodeError:
         pass
 
-    # Try regex extraction for JSON object with content field
-    json_pattern = r'\{[^{}]*"content"[^{}]*\}'
-    match = re.search(json_pattern, raw_text)
-    if match:
+    candidate = _extract_balanced_json_object(cleaned)
+    if candidate:
         try:
-            decision = _build_decision_from_payload(json.loads(match.group(0)))
+            decision = _build_decision_from_payload(json.loads(candidate))
             if decision:
                 return decision
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -286,7 +286,7 @@ def _parse_content_response(raw_text: str) -> LLMDecision:
 
     # Last resort: try to match any JSON-like object
     fallback_pattern = r"\{[\s\S]*?\}"
-    match = re.search(fallback_pattern, raw_text)
+    match = re.search(fallback_pattern, cleaned)
     if match:
         try:
             decision = _build_decision_from_payload(json.loads(match.group(0)))
@@ -305,6 +305,37 @@ def _strip_json_fence(text: str) -> str:
     if match:
         return match.group(1).strip()
     return stripped
+
+
+def _extract_balanced_json_object(text: str) -> Optional[str]:
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(text)):
+        char = text[idx]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+
+    return None
 
 
 def _extract_content_from_payload(data: object) -> Optional[str]:

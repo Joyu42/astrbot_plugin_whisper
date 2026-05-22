@@ -185,6 +185,20 @@ class TestMCPManager:
         assert manager._services["spotify"].command == ["node", "mock.js"]
 
     @pytest.mark.asyncio
+    async def test_load_services_skips_empty_spotify_command(self):
+        """Empty Spotify command config should not break plugin startup."""
+        manager = MCPManager()
+        config = WhisperConfig(
+            mcp_enabled=True,
+            mcp_services=["spotify"],
+            spotify_mcp_command="",
+        )
+
+        await manager.load_services(config)
+
+        assert "spotify" not in manager._services
+
+    @pytest.mark.asyncio
     async def test_stop_all(self):
         """Test stop_all stops all services."""
         # Create mock services

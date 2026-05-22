@@ -2,7 +2,6 @@
 
 import asyncio
 import shlex
-from typing import Optional
 
 from astrbot.api import logger
 from .models import LLMDecision, WhisperConfig
@@ -40,6 +39,9 @@ class MCPManager:
             service_name = self._service_name(entry)
             if service_name == "spotify":
                 command = shlex.split(config.spotify_mcp_command)
+                if not command:
+                    logger.warning("[Whisper] Spotify MCP 命令为空，跳过服务加载")
+                    continue
                 service = SpotifyMCPService(command)
                 self._services["spotify"] = service
                 await service.start()

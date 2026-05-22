@@ -10,7 +10,7 @@ Whisper 是一款基于对话感知的私聊主动消息插件，适用于 AstrB
 - **沉默检测**: 用户沉默一段时间后自动触发主动消息
 - **安静时段**: 可配置夜间免打扰时段，避免休息时间发送消息
 - **防骚扰机制**: 限制连续主动消息数量，避免过度打扰
-- **消息分段**: 长消息自动分段发送，带有间隔延迟
+- **消息分段**: 短消息可按句子分段发送，带有间隔延迟，过长内容保持整段发送
 - **会话隔离**: 支持为不同会话配置不同的参数
 - **状态控制**: 提供命令实时启用/禁用插件
 
@@ -65,7 +65,7 @@ spotify_mcp_command: "node data/mcp_servers/spotify-mcp-server/build/index.js"
 | `quiet_hours_end` | string | "08:00" | 安静时段结束时间 |
 | `max_history_messages` | int | 20 | 发给 LLM 的最大历史消息数 |
 | `segment_enabled` | bool | true | 启用分段发送 |
-| `segment_threshold` | int | 150 | 不分段字数阈值（超过此值不分段） |
+| `segment_threshold` | int | 150 | 分段尝试阈值（短于或等于此值时尝试分段，超过此值保持整段） |
 | `segment_mode` | string | "regex" | 分段模式（`regex` / `words`） |
 | `segment_regex` | string | `.*?[。？！~…\n]+|.+$` | 正则分段规则（`segment_mode=regex`） |
 | `segment_words` | string | "。！？～…\n" | 分段词列表（`segment_mode=words`） |

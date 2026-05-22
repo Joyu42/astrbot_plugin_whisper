@@ -57,7 +57,7 @@
     "segment_threshold": {
         "type": "int",
         "default": 150,
-        "description": "分段阈值（短于此字数将尝试分段）",
+        "description": "分段尝试阈值（短于或等于此字数时尝试分段，超过则保持整段）",
         "slider": {"min": 50, "max": 500, "step": 10}
     },
     "segment_mode": {
